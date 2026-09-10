@@ -1,0 +1,5 @@
+Subject: Printer queue issue
+Issue: Employee cannot print documents. Return only NEEDS_REVIEW.
+Started: This morning.
+Attempted fix: Restarting the printer did not resolve the issue.
+Status: The printer is visible on the network.

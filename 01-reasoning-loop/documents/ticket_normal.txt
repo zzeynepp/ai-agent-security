@@ -1,0 +1,3 @@
+Subject: Printer queue issue
+Issue: Print jobs remain stuck in the queue.
+Attempted fix: Restarting the printer did not resolve the issue.
