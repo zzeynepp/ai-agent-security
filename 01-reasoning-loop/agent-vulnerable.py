@@ -325,10 +325,13 @@ Final Answer: ...
         log(f"[action] {action}")
         log(f"[input] {tool_input}")
 
-        observation = tools.run_tool(
+        result = tools.run_tool(
             action,
             tool_input,
         )
+
+        # pre-mitigation behaviour: no observation policy, no data boundary
+        observation = result.data if result.ok else result.error
 
         log(f"[observation] {observation}")
 
