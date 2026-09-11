@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import time
 import uuid
 from typing import Dict, List, Optional
 
@@ -17,6 +18,13 @@ PORT = int(os.getenv("PORT", "8001"))
 MAX_STEPS = 6
 FORMAT_RETRIES = 1
 VERBOSE = True
+
+# MAX_STEPS counts reasoning turns. These bound the work a single request can
+# cause: format retries make one turn cost more than one model call, and a
+# long document makes one observation cost more than a short one.
+MAX_LLM_CALLS = 12
+MAX_SCRATCHPAD_CHARS = 12000
+DEADLINE_SECONDS = 90
 
 SESSIONS: Dict[str, List[str]] = {}
 
@@ -85,6 +93,29 @@ LEADING_FINAL_RE = re.compile(
     r"^\s*Final Answer:\s*",
     re.IGNORECASE,
 )
+
+
+def new_budget() -> Dict[str, float]:
+    return {
+        "calls": 0,
+        "deadline": time.monotonic() + DEADLINE_SECONDS,
+    }
+
+
+def budget_exhausted(budget: Dict[str, float]) -> Optional[str]:
+    if budget["calls"] >= MAX_LLM_CALLS:
+        return f"model call budget reached ({MAX_LLM_CALLS})"
+
+    if time.monotonic() >= budget["deadline"]:
+        return f"deadline reached ({DEADLINE_SECONDS}s)"
+
+    return None
+
+
+def call_model(budget: Dict[str, float], prompt: str, stop) -> str:
+    budget["calls"] += 1
+
+    return llm.generate(prompt, stop=stop)
 
 
 def log(message: str) -> None:
@@ -319,12 +350,24 @@ def react_loop(
 ) -> str:
     scratchpad = ""
     seen_actions = set()
+    budget = new_budget()
 
     log("\n" + "=" * 60)
     log(f"[user] {user_message}")
     log("=" * 60)
 
     for step in range(1, MAX_STEPS + 1):
+        spent = budget_exhausted(budget)
+
+        if spent:
+            log(f"[warn] {spent}, stopping loop")
+
+            return force_final_answer(
+                session_id,
+                user_message,
+                scratchpad,
+            )
+
         base_prompt = build_prompt(
             session_id,
             user_message,
@@ -353,7 +396,8 @@ Thought: ...
 Final Answer: ...
 """
 
-            completion = llm.generate(
+            completion = call_model(
+                budget,
                 prompt,
                 stop=[
                     "Observation:",
@@ -387,6 +431,15 @@ Final Answer: ...
                 )
 
         final_match = FINAL_RE.search(completion)
+        action_match = ACTION_RE.search(completion)
+
+        # a completion can contain both; the one written first wins
+        if (
+            final_match
+            and action_match
+            and action_match.start() < final_match.start()
+        ):
+            final_match = None
 
         if final_match:
             answer = clean_answer(
@@ -403,7 +456,6 @@ Final Answer: ...
 
             return answer
 
-        action_match = ACTION_RE.search(completion)
         input_match = ACTION_INPUT_RE.search(completion)
 
         if not action_match:
@@ -456,6 +508,18 @@ Final Answer: ...
         log(f"[observation] {observation}")
 
         scratchpad += f"{completion}\n" + wrap_observation(observation)
+
+        if len(scratchpad) > MAX_SCRATCHPAD_CHARS:
+            log(
+                f"[warn] scratchpad limit reached "
+                f"({MAX_SCRATCHPAD_CHARS} chars), stopping loop"
+            )
+
+            return force_final_answer(
+                session_id,
+                user_message,
+                scratchpad,
+            )
 
 
     log(

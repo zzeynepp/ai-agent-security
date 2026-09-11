@@ -416,7 +416,17 @@ I then marked the tool output as untrusted data and told the model not to follow
 
 ![Prompt-level mitigation working for the first payload](images/06-indirect-prompt-injection-mitigated.png)
 
-That result was useful, but it was not a reason to call the issue fixed. A different wording later influenced the model again. Even adding provenance-style metadata such as `Source` and `Trust: untrusted` did not create enforcement.
+That result was useful, but it was not a reason to call the issue fixed.
+
+I also tried removing the injected text from the observation before it reached the next turn. A keyword filter caught the first payload, and the model summarized the ticket normally:
+
+![Keyword filtering removing the injected instruction from the observation](images/07-output-filtering.png)
+
+A reworded payload went through the same filter. This time the model did not summarize the ticket at all. It requested the same document again, duplicate-action detection stopped the loop, and the fallback produced the answer:
+
+![A reworded payload passing the keyword filter](images/08-keyword-filter-bypass.png)
+
+Even adding provenance-style metadata such as `Source` and `Trust: untrusted` did not create enforcement.
 
 ![Untrusted provenance metadata did not prevent the behavior change](images/09-provenance-bypass.png)
 
@@ -448,6 +458,14 @@ Each tool should have only the permissions required for its job. A read-only pol
 
 A hard loop limit such as `MAX_STEPS` provides deterministic termination outside the model.
 
+`MAX_STEPS` counts reasoning turns, not work. A format retry makes one turn cost two model calls, and a long document makes one observation cost far more context than a short one, so the loop also carries a model-call budget, a wall-clock deadline, and a scratchpad size limit. Whichever runs out first sends the run to the same grounded fallback.
+
+```python
+MAX_LLM_CALLS = 12
+MAX_SCRATCHPAD_CHARS = 12000
+DEADLINE_SECONDS = 90
+```
+
 ### Duplicate Action Detection
 
 Repeated `Action + Action Input` combinations can be stopped before the general iteration limit is reached.
@@ -469,6 +487,10 @@ The first version was too strict, though. It also removed legitimate ticket deta
 I replaced that with a small structured allowlist for fields such as `Subject`, `Issue`, `Started`, `Attempted fix`, and `Status`. That restored useful context:
 
 ![Structured allowlist restoring useful ticket context](images/12-structured-allowlist-utility-restored.png)
+
+An instruction line that sat outside the allowed fields no longer reached the model at all:
+
+![The allowlist dropping an instruction line while keeping the ticket fields](images/13-schema-allowlist-blocks-instruction.png)
 
 But this also exposed the limit of schema validation. If instruction-like text is placed inside an allowed field value, the structure is valid and the text can still reach the model:
 
@@ -582,6 +604,8 @@ A control exists
       !=
 The control holds
 ```
+
+One more came out of the same pass. The parser checked for `Final Answer` before `Action`, so a completion containing both took the final answer even when the model had written the action first. It now takes whichever appears first in the text.
 
 `test_controls.py` covers each of these cases, and also pins the limitation that is still there: an instruction placed inside an allowed field value still reaches the model. That test asserts the payload *does* get through, so the gap stays visible if the parser changes later.
 

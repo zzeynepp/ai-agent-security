@@ -7,6 +7,7 @@ import requests
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
+OLLAMA_TIMEOUT = float(os.environ.get("OLLAMA_TIMEOUT", "60"))
 
 
 def generate(prompt: str, stop=None, temperature: float = 0.2) -> str:
@@ -25,7 +26,7 @@ def generate(prompt: str, stop=None, temperature: float = 0.2) -> str:
         response = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json=payload,
-            timeout=120,
+            timeout=OLLAMA_TIMEOUT,
         )
         response.raise_for_status()
     except requests.exceptions.ConnectionError as exc:

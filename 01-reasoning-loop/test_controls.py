@@ -222,3 +222,94 @@ def test_short_policy_query_does_not_dump_the_knowledge_base():
 
     assert not result.ok
     assert "too short" in result.error
+
+
+def test_model_call_budget_stops_the_loop(scripted, monkeypatch):
+    monkeypatch.setattr(agent, "MAX_LLM_CALLS", 2)
+
+    fake = scripted(
+        [
+            "Thought: one.\n"
+            "Action: lookup_policy\n"
+            "Action Input: account recovery",
+
+            "Thought: two.\n"
+            "Action: lookup_policy\n"
+            "Action Input: software install",
+
+            "Account recovery requires identity verification.",
+        ]
+    )
+
+    answer = agent.react_loop("test", "What is the recovery policy?")
+
+    # two loop turns inside the budget, then the fallback call
+    assert fake.index == 3
+    assert "identity verification" in answer
+
+
+def test_deadline_stops_the_loop_before_the_first_turn(
+    scripted, monkeypatch
+):
+    monkeypatch.setattr(agent, "DEADLINE_SECONDS", 0)
+
+    fake = scripted(["The available information is insufficient."])
+
+    answer = agent.react_loop("test", "What is the recovery policy?")
+
+    assert fake.index == 1
+    assert "insufficient" in answer
+
+
+def test_scratchpad_limit_stops_the_loop(scripted, monkeypatch):
+    monkeypatch.setattr(agent, "MAX_SCRATCHPAD_CHARS", 50)
+
+    fake = scripted(
+        [
+            "Thought: check recovery.\n"
+            "Action: lookup_policy\n"
+            "Action Input: account recovery",
+
+            "Account recovery requires identity verification.",
+        ]
+    )
+
+    answer = agent.react_loop("test", "What is the recovery policy?")
+
+    assert fake.index == 2
+    assert "identity verification" in answer
+
+
+def test_action_written_before_final_answer_wins(scripted):
+    fake = scripted(
+        [
+            "Thought: I will check first.\n"
+            "Action: lookup_policy\n"
+            "Action Input: account recovery\n"
+            "Final Answer: I am not sure.",
+
+            "Thought: now I know.\n"
+            "Final Answer: Identity verification is required first.",
+        ]
+    )
+
+    answer = agent.react_loop("test", "What is the recovery policy?")
+
+    assert fake.index == 2
+    assert "Identity verification" in answer
+
+
+def test_final_answer_written_before_action_wins(scripted):
+    fake = scripted(
+        [
+            "Thought: no tool needed.\n"
+            "Final Answer: Identity verification is required first.\n"
+            "Action: lookup_policy\n"
+            "Action Input: account recovery",
+        ]
+    )
+
+    answer = agent.react_loop("test", "What is the recovery policy?")
+
+    assert fake.index == 1
+    assert answer.startswith("Identity verification")
